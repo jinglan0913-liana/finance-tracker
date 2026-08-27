@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+/*
+  Our design tokens. Anything defined here as --color-xyz automatically
+  becomes a Tailwind class: bg-xyz, text-xyz, border-xyz, and so on.
+  Change a value here and the whole app updates.
+*/
+@theme {
+  --color-canvas: #0c0c0e;
+  --color-surface: #151518;
+  --color-elevated: #1c1c21;
+  --color-line: #26262c;
+  --color-ink: #ededf0;
+  --color-muted: #8b8b95;
+  --color-faint: #5b5b65;
+
+  --color-accent: #7c6bf0;
+  --color-positive: #4ade80;
+  --color-negative: #fb7185;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
+    Helvetica, Arial, sans-serif;
+}
+
+:root {
+  /* Tells the browser to render scrollbars and form controls in dark mode. */
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
