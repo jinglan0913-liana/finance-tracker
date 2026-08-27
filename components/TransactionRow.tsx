@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useFinance } from "@/app/providers";
 import { formatCurrency, formatShortDate } from "@/lib/format";
 import type { Category, Transaction } from "@/lib/types";
@@ -25,8 +26,33 @@ const categoryDot: Record<Category, string> = {
   Other: "bg-slate-400",
 };
 
+/*
+  ------------------------------------------------------------
+  WHY THE MENU IS A PORTAL AND NOT JUST AN ABSOLUTE DIV
+  ------------------------------------------------------------
+  The list of rows is wrapped in `overflow-hidden`, which is what makes
+  the rounded corners actually clip the row backgrounds. But that clips
+  EVERY descendant — so a dropdown hanging out of a row got cut off, and
+  on the last row the Delete item was sliced away entirely.
+
+  Moving the menu to document.body takes it out of that box completely.
+  Nothing in the page layout can clip it, and it sits above everything
+  else. The cost is that it no longer moves with the row on its own, so
+  its position is measured from the button and refreshed while scrolling
+  or resizing.
+*/
+
+/** Menu box size. Kept here because the flip-up maths needs to know it. */
+const MENU_WIDTH = 160;
+const MENU_HEIGHT = 84;
+/** Breathing room from the button, and from the edges of the screen. */
+const GAP = 6;
+const EDGE = 8;
+
+type Position = { top: number; left: number };
+
 const menuItemClass =
-  "flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors";
+  "flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors";
 
 export default function TransactionRow({
   transaction,
@@ -48,27 +74,94 @@ export default function TransactionRow({
   const isIncome = transaction.type === "income";
 
   const hasActions = onEdit !== undefined && onDelete !== undefined;
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  // null means closed. Anything else is where the menu should be drawn.
+  const [position, setPosition] = useState<Position | null>(null);
+  const isMenuOpen = position !== null;
+
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Clicking anywhere else, or pressing Escape, closes the menu.
+  /**
+   * Works out where the menu goes, from wherever the button currently is.
+   *
+   * Right edges are lined up so the menu reads as belonging to the button.
+   * It drops below by default and flips above when it would run off the
+   * bottom of the screen, and it is kept inside the left/right edges so a
+   * narrow phone never pushes it out of view.
+   */
+  const place = useCallback(() => {
+    const button = buttonRef.current;
+    if (!button) return;
+
+    const rect = button.getBoundingClientRect();
+
+    // Scrolled the row off the screen — the menu has nothing to point at.
+    if (rect.bottom < 0 || rect.top > window.innerHeight) {
+      setPosition(null);
+      return;
+    }
+
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const flipUp =
+      spaceBelow < MENU_HEIGHT + GAP + EDGE && rect.top > MENU_HEIGHT + GAP + EDGE;
+
+    const top = flipUp ? rect.top - MENU_HEIGHT - GAP : rect.bottom + GAP;
+    const left = rect.right - MENU_WIDTH;
+
+    setPosition({
+      top: Math.max(EDGE, top),
+      // Never let it hang off either side.
+      left: Math.min(Math.max(EDGE, left), window.innerWidth - MENU_WIDTH - EDGE),
+    });
+  }, []);
+
+  const closeMenu = useCallback(() => setPosition(null), []);
+
+  /*
+    Everything that should dismiss or move the menu, in one place.
+
+    `pointerdown` rather than `mousedown` so a tap on a phone closes it
+    just as a click does. Both refs are checked because the menu is no
+    longer inside the row — clicking it would otherwise count as clicking
+    "somewhere else" and close it before the button ever fired.
+
+    Scroll is listened to in the capture phase so scrolling ANY container
+    is caught, not just the window.
+  */
   useEffect(() => {
     if (!isMenuOpen) return;
 
-    function handlePointer(e: MouseEvent) {
-      if (!menuRef.current?.contains(e.target as Node)) setIsMenuOpen(false);
+    function handlePointer(e: PointerEvent) {
+      const target = e.target as Node;
+      if (menuRef.current?.contains(target)) return;
+      if (buttonRef.current?.contains(target)) return;
+      closeMenu();
     }
     function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setIsMenuOpen(false);
+      if (e.key === "Escape") {
+        closeMenu();
+        buttonRef.current?.focus();
+      }
     }
 
-    document.addEventListener("mousedown", handlePointer);
+    document.addEventListener("pointerdown", handlePointer);
     document.addEventListener("keydown", handleKey);
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
     return () => {
-      document.removeEventListener("mousedown", handlePointer);
+      document.removeEventListener("pointerdown", handlePointer);
       document.removeEventListener("keydown", handleKey);
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
     };
-  }, [isMenuOpen]);
+  }, [isMenuOpen, place, closeMenu]);
+
+  /** Runs one of the two actions and puts the menu away. */
+  function choose(action: () => void) {
+    closeMenu();
+    action();
+  }
 
   // "Groceries · BOA Checking", or "Chase Checking → Chase Savings"
   const detail = isTransfer
@@ -104,52 +197,62 @@ export default function TransactionRow({
 
       {/* The actions menu. Only on pages that can act on a transaction. */}
       {hasActions && (
-        <div ref={menuRef} className="relative shrink-0">
+        <>
           <button
+            ref={buttonRef}
             type="button"
-            onClick={() => setIsMenuOpen((open) => !open)}
+            onClick={() => (isMenuOpen ? closeMenu() : place())}
             aria-label={`Actions for ${transaction.description}`}
             aria-haspopup="menu"
             aria-expanded={isMenuOpen}
-            className={`rounded-md p-1 transition-colors hover:bg-elevated hover:text-ink ${
+            className={`shrink-0 rounded-md p-1.5 transition-colors hover:bg-elevated hover:text-ink ${
               isMenuOpen ? "bg-elevated text-ink" : "text-faint"
             }`}
           >
             <MoreIcon className="h-4 w-4" />
           </button>
 
-          {isMenuOpen && (
-            <div
-              role="menu"
-              className="absolute right-0 top-full z-20 mt-1 w-36 overflow-hidden rounded-lg border border-line bg-surface py-1 shadow-xl"
-            >
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setIsMenuOpen(false);
-                  onEdit();
+          {/*
+            Drawn straight onto document.body, so no overflow rule
+            anywhere up the page can clip it. `fixed` matches the
+            coordinates getBoundingClientRect gave us.
+          */}
+          {position &&
+            createPortal(
+              <div
+                ref={menuRef}
+                role="menu"
+                aria-label="Transaction actions"
+                style={{
+                  top: position.top,
+                  left: position.left,
+                  width: MENU_WIDTH,
                 }}
-                className={`${menuItemClass} text-muted hover:bg-elevated hover:text-ink`}
+                className="fixed z-[100] overflow-hidden rounded-lg border border-line bg-surface py-1 shadow-2xl"
               >
-                <PencilIcon className="h-3.5 w-3.5" />
-                Edit
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setIsMenuOpen(false);
-                  onDelete();
-                }}
-                className={`${menuItemClass} text-muted hover:bg-negative/10 hover:text-negative`}
-              >
-                <TrashIcon className="h-3.5 w-3.5" />
-                Delete
-              </button>
-            </div>
-          )}
-        </div>
+                <button
+                  type="button"
+                  role="menuitem"
+                  autoFocus
+                  onClick={() => choose(onEdit)}
+                  className={`${menuItemClass} text-ink hover:bg-elevated`}
+                >
+                  <PencilIcon className="h-4 w-4 text-muted" />
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => choose(onDelete)}
+                  className={`${menuItemClass} text-negative hover:bg-negative/10`}
+                >
+                  <TrashIcon className="h-4 w-4" />
+                  Delete
+                </button>
+              </div>,
+              document.body,
+            )}
+        </>
       )}
     </div>
   );
