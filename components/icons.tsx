@@ -145,6 +145,17 @@ export function TrashIcon(props: IconProps) {
   );
 }
 
+/** The three dots that open a row's actions menu. */
+export function MoreIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <circle cx="12" cy="5" r="1" fill="currentColor" />
+      <circle cx="12" cy="12" r="1" fill="currentColor" />
+      <circle cx="12" cy="19" r="1" fill="currentColor" />
+    </Base>
+  );
+}
+
 export function ChevronLeftIcon(props: IconProps) {
   return (
     <Base {...props}>

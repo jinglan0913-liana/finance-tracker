@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useFinance } from "@/app/providers";
+import DeleteTransactionDialog from "@/components/DeleteTransactionDialog";
 import MonthSelector from "@/components/MonthSelector";
 import PageHeader from "@/components/PageHeader";
 import StatCard from "@/components/StatCard";
@@ -10,11 +11,26 @@ import TransactionRow from "@/components/TransactionRow";
 import { PlusIcon, TrendDownIcon, TrendUpIcon } from "@/components/icons";
 import { filterByMonth } from "@/lib/dates";
 import { getMonthlySummary } from "@/lib/summary";
+import type { Transaction } from "@/lib/types";
+
+/*
+  What the modal is doing right now: nothing, adding, editing one
+  transaction, or asking whether to delete one. Keeping it as a single
+  value rather than three booleans means two of them can never be open
+  at once.
+*/
+type ModalState =
+  | { mode: "closed" }
+  | { mode: "add" }
+  | { mode: "edit"; transaction: Transaction }
+  | { mode: "delete"; transaction: Transaction };
 
 export default function TransactionsPage() {
   // Read from the shared data, so anything added here shows up everywhere.
-  const { transactions, selectedRange } = useFinance();
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const { transactions, selectedRange, deleteTransaction } = useFinance();
+  const [modal, setModal] = useState<ModalState>({ mode: "closed" });
+
+  const closeModal = () => setModal({ mode: "closed" });
 
   // Only this month's transactions are shown. The rest stay in the data,
   // ready for whichever month you switch to next.
@@ -34,7 +50,7 @@ export default function TransactionsPage() {
             <MonthSelector />
             <button
               type="button"
-              onClick={() => setIsModalOpen(true)}
+              onClick={() => setModal({ mode: "add" })}
               className="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
             >
               <PlusIcon className="h-4 w-4" />
@@ -73,7 +89,12 @@ export default function TransactionsPage() {
       {monthTransactions.length > 0 ? (
         <div className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface">
           {monthTransactions.map((transaction) => (
-            <TransactionRow key={transaction.id} transaction={transaction} />
+            <TransactionRow
+              key={transaction.id}
+              transaction={transaction}
+              onEdit={() => setModal({ mode: "edit", transaction })}
+              onDelete={() => setModal({ mode: "delete", transaction })}
+            />
           ))}
         </div>
       ) : (
@@ -87,7 +108,7 @@ export default function TransactionsPage() {
           </p>
           <button
             type="button"
-            onClick={() => setIsModalOpen(true)}
+            onClick={() => setModal({ mode: "add" })}
             className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
           >
             <PlusIcon className="h-4 w-4" />
@@ -103,8 +124,29 @@ export default function TransactionsPage() {
         </p>
       )}
 
-      {isModalOpen && (
-        <TransactionModal onClose={() => setIsModalOpen(false)} />
+      {/*
+        Rendering the modal only while it is open, plus the `key`,
+        guarantees a fresh form each time — so opening a different
+        transaction always shows that one's values, never the last one's.
+      */}
+      {(modal.mode === "add" || modal.mode === "edit") && (
+        <TransactionModal
+          key={modal.mode === "edit" ? modal.transaction.id : "new"}
+          transaction={modal.mode === "edit" ? modal.transaction : undefined}
+          onClose={closeModal}
+        />
+      )}
+
+      {/* Nothing is deleted until this is confirmed. */}
+      {modal.mode === "delete" && (
+        <DeleteTransactionDialog
+          transaction={modal.transaction}
+          onCancel={closeModal}
+          onConfirm={() => {
+            deleteTransaction(modal.transaction.id);
+            closeModal();
+          }}
+        />
       )}
     </div>
   );

@@ -14,7 +14,14 @@ import { todayIso } from "@/lib/dates";
 import { CloseIcon } from "./icons";
 
 /*
-  The Add Transaction form. Which fields you see depends on the type:
+  ONE form does two jobs:
+    - no `transaction` prop  -> "Add transaction"
+    - a `transaction` prop   -> "Edit transaction", every field pre-filled
+
+  Writing it once means the two can never drift apart, and an edit always
+  offers exactly the same choices that adding does.
+
+  Which fields you see depends on the type:
 
     Expense   name, date, category, amount, account
     Income    name, date, category, amount, account
@@ -22,6 +29,10 @@ import { CloseIcon } from "./icons";
 
   There is no currency picker on purpose. A transaction always uses the
   currency of the account it touches, so the currency is *shown*, never chosen.
+
+  Saving an edit does NOT overwrite the balances. The old transaction is
+  reversed and the new one applied — see app/providers.tsx and
+  supabase/add-transaction-rpc.sql.
 */
 
 const types: { value: TransactionType; label: string }[] = [
@@ -36,16 +47,45 @@ const fieldClass =
 
 const labelClass = "mb-1.5 block text-xs text-muted";
 
-export default function TransactionModal({ onClose }: { onClose: () => void }) {
-  const { accounts, addTransaction } = useFinance();
+export default function TransactionModal({
+  transaction,
+  onClose,
+}: {
+  /** Leave undefined to add a new transaction; pass one to edit it. */
+  transaction?: Transaction;
+  onClose: () => void;
+}) {
+  const { accounts, addTransaction, updateTransaction } = useFinance();
 
-  const [type, setType] = useState<TransactionType>("expense");
-  const [description, setDescription] = useState("");
-  const [date, setDate] = useState(todayIso());
-  const [category, setCategory] = useState<Category>("Groceries");
-  const [amount, setAmount] = useState("");
-  const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
-  const [toAccountId, setToAccountId] = useState(accounts[1]?.id ?? "");
+  const isEditing = transaction !== undefined;
+
+  /*
+    These useState calls read `transaction` only once, when the modal
+    appears. That works because the page gives this component a `key`, so
+    opening a different transaction builds a fresh form rather than
+    reusing the previous one's values.
+
+    `||` rather than `??` on the two account ids: a transaction whose
+    account has since been deleted arrives with an empty string, and that
+    should fall back to a real account the same way a blank one does.
+  */
+  const [type, setType] = useState<TransactionType>(
+    transaction?.type ?? "expense",
+  );
+  const [description, setDescription] = useState(transaction?.description ?? "");
+  const [date, setDate] = useState(transaction?.date ?? todayIso());
+  const [category, setCategory] = useState<Category>(
+    transaction?.category ?? "Groceries",
+  );
+  const [amount, setAmount] = useState(
+    transaction ? String(transaction.amount) : "",
+  );
+  const [accountId, setAccountId] = useState(
+    transaction?.accountId || accounts[0]?.id || "",
+  );
+  const [toAccountId, setToAccountId] = useState(
+    transaction?.toAccountId || accounts[1]?.id || "",
+  );
   const [error, setError] = useState("");
 
   const isTransfer = type === "transfer";
@@ -115,8 +155,9 @@ export default function TransactionModal({ onClose }: { onClose: () => void }) {
       }
     }
 
-    const transaction: Transaction = {
-      id: crypto.randomUUID(),
+    const saved: Transaction = {
+      // Editing keeps the same id, so the same row is rewritten.
+      id: transaction?.id ?? crypto.randomUUID(),
       date,
       description: trimmed,
       type,
@@ -128,7 +169,9 @@ export default function TransactionModal({ onClose }: { onClose: () => void }) {
       ...(isTransfer ? { toAccountId: toAccount!.id } : {}),
     };
 
-    addTransaction(transaction);
+    // Editing reverses the old transaction before applying this one.
+    if (isEditing) updateTransaction(saved);
+    else addTransaction(saved);
     onClose();
   }
 
@@ -153,7 +196,9 @@ export default function TransactionModal({ onClose }: { onClose: () => void }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-5 flex items-center justify-between">
-          <h2 className="text-base font-medium">Add transaction</h2>
+          <h2 className="text-base font-medium">
+            {isEditing ? "Edit transaction" : "Add transaction"}
+          </h2>
           <button
             type="button"
             onClick={onClose}
@@ -317,7 +362,7 @@ export default function TransactionModal({ onClose }: { onClose: () => void }) {
               disabled={crossCurrency || sameAccount}
               className="rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Add transaction
+              {isEditing ? "Save changes" : "Add transaction"}
             </button>
           </div>
         </form>

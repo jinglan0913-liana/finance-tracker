@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { useAuth } from "@/app/auth-provider";
-import { applyToAccounts } from "@/lib/balances";
+import { applyEdit, applyToAccounts, revertFromAccounts } from "@/lib/balances";
 import * as db from "@/lib/db";
 import {
   addMonths,
@@ -43,6 +43,10 @@ type FinanceValue = {
   saveAccount: (account: Account) => void;
   deleteAccount: (id: string) => void;
   addTransaction: (transaction: Transaction) => void;
+  /** Rewrites one transaction: the old one is reversed, the new one applied. */
+  updateTransaction: (transaction: Transaction) => void;
+  /** Removes one transaction and puts the money it moved back. */
+  deleteTransaction: (id: string) => void;
   getAccount: (id: string | undefined) => Account | undefined;
 
   /* ---- Which month the reports are showing ---- */
@@ -165,6 +169,53 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     persist(() => db.saveTransaction(transaction, changed, user.id));
   }
 
+  /*
+    Editing and deleting both change several rows at once, so unlike the
+    two-step save above they hand the whole job to a single database
+    function (see supabase/add-transaction-rpc.sql). It either does all
+    of it or none of it.
+
+    The screen is still updated first so the app answers instantly. The
+    database then replies with the balances it actually stored, and those
+    replace the guess — so a rounding difference or a change made in
+    another tab can never leave a wrong number on screen.
+  */
+
+  /** Overwrites the accounts we predicted with the ones the database stored. */
+  function reconcile(saved: Account[]) {
+    if (saved.length === 0) return;
+    setAccounts((current) =>
+      current.map((a) => saved.find((s) => s.id === a.id) ?? a),
+    );
+  }
+
+  function updateTransaction(updated: Transaction) {
+    const before = transactions.find((t) => t.id === updated.id);
+    // Already gone — nothing to reverse, so there is nothing to do.
+    if (!before) return;
+
+    setTransactions((current) =>
+      current
+        .map((t) => (t.id === updated.id ? updated : t))
+        .sort((a, b) => b.date.localeCompare(a.date)),
+    );
+    // Reverse the old transaction, then apply the new one.
+    setAccounts((current) => applyEdit(current, before, updated));
+
+    persist(async () => reconcile(await db.updateTransaction(updated)));
+  }
+
+  function deleteTransaction(id: string) {
+    const doomed = transactions.find((t) => t.id === id);
+    if (!doomed) return;
+
+    setTransactions((current) => current.filter((t) => t.id !== id));
+    // Put back whatever it took, take back whatever it gave.
+    setAccounts((current) => revertFromAccounts(current, doomed));
+
+    persist(async () => reconcile(await db.deleteTransaction(id)));
+  }
+
   function getAccount(id: string | undefined) {
     if (!id) return undefined;
     return accounts.find((a) => a.id === id);
@@ -221,6 +272,8 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         saveAccount,
         deleteAccount,
         addTransaction,
+        updateTransaction,
+        deleteTransaction,
         getAccount,
         selectedMonth,
         selectedRange,

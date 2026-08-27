@@ -197,6 +197,72 @@ export async function saveTransaction(
   await upsertAccounts(changedAccounts, userId);
 }
 
+/*
+  ---------------- Editing and deleting ----------------
+
+  These two do NOT write the rows themselves. They call a function that
+  lives inside the database (supabase/add-transaction-rpc.sql), because
+  each one changes several rows at once:
+
+    delete an expense  -> remove the row  + give the money back
+    edit a transfer    -> rewrite the row + move up to four balances
+
+  A database function runs as a single unit: either every row changes or
+  none of them do. Sending the same work as three separate requests from
+  here would let one of them fail on its own and leave a transaction that
+  no longer matches the balances around it.
+
+  The balance maths happens in there too, reading the OLD row straight
+  from the table rather than trusting whatever the browser sends up. Both
+  functions hand back the accounts they touched, so the app can show the
+  balances that were actually stored instead of its own prediction.
+
+  Security is unchanged: the functions run as the caller, so the same
+  row level security applies inside them. No service-role key is used.
+*/
+
+/** Reads the accounts a database function returned. */
+function accountsFrom(rows: unknown): Account[] {
+  return ((rows ?? []) as AccountRow[]).map(rowToAccount);
+}
+
+/**
+ * Deletes a transaction and reverses its effect on the balances.
+ * Returns the affected accounts with their new stored balances.
+ */
+export async function deleteTransaction(id: string): Promise<Account[]> {
+  return accountsFrom(
+    check(await supabase.rpc("delete_transaction", { p_id: id })),
+  );
+}
+
+/**
+ * Rewrites a transaction: the old one is reversed and the new one
+ * applied, in one step. Returns every account either side of the edit,
+ * with its new stored balance.
+ */
+export async function updateTransaction(t: Transaction): Promise<Account[]> {
+  const isTransfer = t.type === "transfer";
+  return accountsFrom(
+    check(
+      await supabase.rpc("update_transaction", {
+        p_id: t.id,
+        p_name: t.description,
+        p_date: t.date,
+        p_type: t.type,
+        p_category: t.category,
+        p_amount: t.amount,
+        p_currency: t.currency,
+        // Same column rule as transactionToRow: expense and income use
+        // account_id, transfers use the from/to pair.
+        p_account_id: isTransfer ? null : t.accountId,
+        p_from_account_id: isTransfer ? t.accountId : null,
+        p_to_account_id: isTransfer ? (t.toAccountId ?? null) : null,
+      }),
+    ),
+  );
+}
+
 /* ---------------- Budgets ---------------- */
 
 type BudgetRow = {
